@@ -14,6 +14,7 @@ public:
 	T& ofs(int o) { return _data[o]; }
 	const T& xy(int x, int y) const { return _data[y * W + x]; }
 	const T& ofs(int o) const { return _data[o]; }
+	T* data() { return _data; }
 private:
 	T _data[W * H];
 };
@@ -226,7 +227,7 @@ static inline sf::Uint8 computeCC(int x, int y, const ccparams& p)
 }
 
 // ---------------------------------------------------------------------------------------
-// circles
+// plasma
 // ---------------------------------------------------------------------------------------
 
 inline float term(float x)
@@ -258,6 +259,12 @@ static inline sf::Uint8 computePlasma(int x, int y, const int& frame)
 }
 
 // ---------------------------------------------------------------------------------------
+// fire
+// ---------------------------------------------------------------------------------------
+
+
+
+// ---------------------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------------------
 
@@ -277,9 +284,41 @@ int main(int, char**)
 
 	auto pal0 = demo::makePal<sf::Uint32, 256>([] (size_t i) { return demo::rgba(255, i, 0, i); });
 	auto pal1 = demo::makePal<sf::Uint32, 256>([] (size_t i) { return demo::rgba(255, 255 - i, 0, i); });
+	auto pal2 = demo::makePal<sf::Uint32, 256>([] (size_t i) {
+		if (i < 64)  return demo::rgba(255, 0            , 0           , 4 * i);
+		if (i < 128) return demo::rgba(255, 0            , 4 * (i - 64), 255);
+		if (i < 192) return demo::rgba(255, 4 * (i - 128), 255         , 255);
+		return              demo::rgba(255, 255          , 255         , 255);
+	});
 
 	win.run([&] (tWin320x200::tBackBuffer& bgFb, int frame) {
-		if (frame < 1000)
+		const int fxDuration = 1000;
+		if (frame < 1 * fxDuration)
+		{
+			sf::Uint8* d = fb8->data();
+			if (frame % 8 == 0)
+			{
+				for (int j = 0; j < ScrWidth;)
+				{
+					sf::Uint8 r = 192 + 16 * (rand() % 4);
+					for (int i = 0; i < 10; ++i, ++j)
+					{
+						d[(ScrHeight - 1) * ScrWidth + j] = r;
+					}
+				}
+			}
+			for (int j = 0; j < 2; ++j)
+			{
+				for (int i = 0; i < (ScrHeight - 1) * ScrWidth; ++i)
+				{
+					d[i] = (2 * d[i] + 1 * d[i + ScrWidth - 1] + 4 * d[i + ScrWidth] + 1 * d[i + ScrWidth + 1]) / 8;
+					if (d[i] > 0)
+						--d[i];
+				}
+			}
+			bgFb.transformOfs(*fb8, [&pal2] (sf::Uint8 l) { return pal2[l]; });
+		}
+		else if (frame < 2 * fxDuration)
 		{
 			plasma->_params = frame;
 			if (frame < 300)
@@ -287,7 +326,7 @@ int main(int, char**)
 			else
 				bgFb.transformOfs(fb8->copyXY(*plasma), [&pal1] (sf::Uint8 l) { return pal1[l]; });
 		}
-		else if (frame < 2000)
+		else if (frame < 3 * fxDuration)
 		{
 			cc->_params = {
 				int(160 + 150 * sinf(0.03f * frame)), 100,
