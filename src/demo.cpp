@@ -16,7 +16,7 @@ public:
 	const T& ofs(int o) const { return _data[o]; }
 	T* data() { return _data; }
 private:
-	T _data[W * H];
+	T _data[W * (H + 1)];
 };
 
 template <typename T, int W, int H, T (*F)(int, int)>
@@ -261,8 +261,29 @@ static inline sf::Uint8 computePlasma(int x, int y, const int& frame)
 // ---------------------------------------------------------------------------------------
 // fire
 // ---------------------------------------------------------------------------------------
-
-
+inline void setFire(sf::Uint16* d, int frame)
+{
+	if (frame % 4 == 0)
+	{
+		for (int j = 0; j < ScrWidth;)
+		{
+			sf::Uint8 r = 192 + 63 * (rand() % 2);
+			for (int i = 0; i < 10; ++i, ++j)
+			{
+				d[(ScrHeight - 1) * ScrWidth + j] = (r << 8) + rand() % 8;
+			}
+		}
+	}
+	for (int j = 0; j < 2; ++j)
+	{
+		for (int i = 0; i < (ScrHeight - 1) * ScrWidth; ++i)
+		{
+			d[i] = (2 * d[i] + 1 * d[i + ScrWidth - 1] + 3 * d[i + ScrWidth] + 2 * d[i + ScrWidth + 1]) / 8;
+			if (d[i] > 255 /*&& d[i] < (200 << 8)*/)
+				d[i] -= 256;
+		}
+	}
+}
 
 // ---------------------------------------------------------------------------------------
 // main
@@ -279,44 +300,26 @@ int main(int, char**)
 	tWin320x200 win;
 	
 	auto fb8 = win.createBuffer<sf::Uint8>();
+	auto fb16 = win.createBuffer<sf::Uint16>();
 	auto cc = new demo::buffer<sf::Uint8, ScrWidth, ScrHeight, demo::procst<sf::Uint8, ScrWidth, ScrHeight, ccparams, computeCC>>();
 	auto plasma = new demo::buffer<sf::Uint8, ScrWidth, ScrHeight, demo::procst<sf::Uint8, ScrWidth, ScrHeight, int, computePlasma>>();
 
 	auto pal0 = demo::makePal<sf::Uint32, 256>([] (size_t i) { return demo::rgba(255, i, 0, i); });
 	auto pal1 = demo::makePal<sf::Uint32, 256>([] (size_t i) { return demo::rgba(255, 255 - i, 0, i); });
 	auto pal2 = demo::makePal<sf::Uint32, 256>([] (size_t i) {
-		if (i < 64)  return demo::rgba(255, 0            , 0           , 4 * i);
-		if (i < 128) return demo::rgba(255, 0            , 4 * (i - 64), 255);
-		if (i < 192) return demo::rgba(255, 4 * (i - 128), 255         , 255);
-		return              demo::rgba(255, 255          , 255         , 255);
+		if (i < 64 ) return demo::rgba(255, 0            , 0           , 4 * i);
+		if (i < 128) return demo::rgba(255, 0            , 4 * (i - 64), 255  );
+		if (i < 192) return demo::rgba(255, 4 * (i - 128), 255         , 255  );
+		return              demo::rgba(255, 255          , 255         , 255  );
 	});
 
 	win.run([&] (tWin320x200::tBackBuffer& bgFb, int frame) {
 		const int fxDuration = 1000;
 		if (frame < 1 * fxDuration)
 		{
-			sf::Uint8* d = fb8->data();
-			if (frame % 8 == 0)
-			{
-				for (int j = 0; j < ScrWidth;)
-				{
-					sf::Uint8 r = 192 + 16 * (rand() % 4);
-					for (int i = 0; i < 10; ++i, ++j)
-					{
-						d[(ScrHeight - 1) * ScrWidth + j] = r;
-					}
-				}
-			}
-			for (int j = 0; j < 2; ++j)
-			{
-				for (int i = 0; i < (ScrHeight - 1) * ScrWidth; ++i)
-				{
-					d[i] = (2 * d[i] + 1 * d[i + ScrWidth - 1] + 4 * d[i + ScrWidth] + 1 * d[i + ScrWidth + 1]) / 8;
-					if (d[i] > 0)
-						--d[i];
-				}
-			}
-			bgFb.transformOfs(*fb8, [&pal2] (sf::Uint8 l) { return pal2[l]; });
+			// use 16bpp buffer to increase quality
+			setFire(fb16->data(), frame);
+			bgFb.transformOfs(*fb16, [&pal2] (sf::Uint16 l) { return pal2[l >> 8]; });
 		}
 		else if (frame < 2 * fxDuration)
 		{
