@@ -2,7 +2,14 @@
 solution "oldschoolfx"
 
 configurations { "debug", "release" }
-buildoptions "-std=c++11"
+
+configuration "debug"
+	flags { "Symbols" };
+configuration "release"
+	flags { "OptimizeSpeed" };
+configuration "*"
+
+buildoptions { "-std=c++11", "-Wall", "-pedantic" }
 links { "sfml-window", "sfml-system", "sfml-graphics" }
 
 project "oldschoolfx"
