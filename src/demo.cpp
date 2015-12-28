@@ -237,22 +237,29 @@ static inline sf::Uint8 computeCC(int x, int y, const ccparams& p)
 // plasma
 // ---------------------------------------------------------------------------------------
 
+template <typename T>
+T slerp(T x, T b)
+{
+	return (3 * x * x * b - 2 * x * x * x) / (b * b);
+}
+
+template <typename T>
+T fakesin(T x, T b)
+{
+	x = x & (b - 1);
+	return (x < b / 2) ?  slerp<T>(x, b / 2) : b / 2 - slerp<T>(x - b / 2, b / 2);
+}
+
 static inline sf::Uint8 sample(int x, int y)
 {
-#if 0
-	x = x & 255;
-	y = y & 255;
-	return 128 - std::min(128, (128 * dist(x, y, 128, 128)) / dist(0, 128, 128, 128));
-#else
-	return 64.0f * (2.0f + sin((2.0f * 3.14f * x) / 255.0f) + sin((2.0f * 3.14f * y) / 255.0f));
-#endif
+	return fakesin<int>(x, 256) + fakesin<int>(y, 256);
 }
 
 static inline sf::Uint8 computePlasma(int x, int y, const int& frame)
 {
 	const sf::Uint8 p0 = sample(x, y);
-	const sf::Uint8 p1 = sample(x + 128 * sin(float(y + 4 * frame) * 0.01f), y);
-	const sf::Uint8 p2 = sample(x, y + 128 * sin(float(x + 3 * frame) * 0.01f));
+	const sf::Uint8 p1 = sample(x + fakesin<int>(y + 4 * frame, 256), y);
+	const sf::Uint8 p2 = sample(x, y + fakesin<int>(x + 3 * frame, 256));
 	return p0 + p1 + p2;
 }
 
