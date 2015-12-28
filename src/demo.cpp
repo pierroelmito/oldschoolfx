@@ -172,9 +172,9 @@ public:
 	}
 };
 
-inline sf::Uint32 argb(sf::Uint8 a, sf::Uint8 r, sf::Uint8 g, sf::Uint8 b)
+inline sf::Uint32 abgr(sf::Uint8 a, sf::Uint8 b, sf::Uint8 g, sf::Uint8 r)
 {
-	return (a << 24) | (r << 16) | (g << 8) | b;
+	return (a << 24) | (b << 16) | (g << 8) | r;
 }
 
 inline sf::Uint32 modulate(sf::Uint32 a, sf::Uint32 b)
@@ -189,6 +189,30 @@ inline sf::Uint32 modulate(sf::Uint32 a, sf::Uint32 b)
 	e[2] = sf::Uint8(c[2] * d[2] / 255u);
 	e[3] = sf::Uint8(c[3] * d[3] / 255u);
 	return r;
+}
+
+inline sf::Uint32 blend(sf::Uint32 a, sf::Uint32 b, int mul, int div)
+{
+	typedef sf::Uint8 tColor[4];
+	tColor& c = *reinterpret_cast<tColor*>(&a);
+	tColor& d = *reinterpret_cast<tColor*>(&b);
+	sf::Uint32 r;
+	tColor& e = *reinterpret_cast<tColor*>(&r);
+	e[0] = sf::Uint8(((div - mul) * c[0] + mul * d[0]) / div);
+	e[1] = sf::Uint8(((div - mul) * c[1] + mul * d[1]) / div);
+	e[2] = sf::Uint8(((div - mul) * c[2] + mul * d[2]) / div);
+	e[3] = sf::Uint8(((div - mul) * c[3] + mul * d[3]) / div);
+	return r;
+}
+
+inline bool palRamp(int s, int e, int i, sf::Uint32 cs, sf::Uint32 ce, sf::Uint32* r)
+{
+	if (i >= s && i <= e)
+	{
+		*r = blend(cs, ce, i - s, e - s);
+		return true;
+	}
+	return false;
 }
 
 template <class T, size_t N, class F>
@@ -332,20 +356,44 @@ int main(int, char**)
 	auto plasma = new demo::buffer<sf::Uint8, ScrWidth, ScrHeight, demo::procst<sf::Uint8, ScrWidth, ScrHeight, int, computePlasma>>();
 
 	// palettes
-	auto palCC = demo::makePal<sf::Uint32, 256>([] (size_t i) { return demo::argb(255, i, 0, i); });
-	auto palRZ = demo::makePal<sf::Uint32, 256>([] (size_t i) { return demo::argb(255, i, 0, i); });
-	auto palPlasma = demo::makePal<sf::Uint32, 256>([] (size_t i) { return (i < 128) ? demo::argb(255, 255 - i * 2, 0, i * 2) : demo::argb(255, (i - 128) * 2, 0, 255 - (i - 128) * 2); });
+	auto palCC = demo::makePal<sf::Uint32, 256>([] (size_t i) {
+		sf::Uint32 r = 0;
+		if (demo::palRamp(0, 255, i, 0xff00ff00, 0xffff00ff, &r)) return r;
+		return r;
+	});
+	auto palRZ = demo::makePal<sf::Uint32, 256>([] (size_t i) {
+		sf::Uint32 r = 0;
+		if (demo::palRamp(0, 255, i, 0xff0000ff, 0xffffff00, &r)) return r;
+		return r;
+	});
+	auto palPlasma = demo::makePal<sf::Uint32, 256>([] (size_t i) {
+		const sf::Uint32 c0 = 0xffff0000;
+		const sf::Uint32 c1 = 0xff0000ff;
+		const sf::Uint32 c2 = 0xff00ffff;
+		sf::Uint32 r = 0;
+		if (demo::palRamp(0  , 63 , i, c0, c1, &r)) return r;
+		if (demo::palRamp(64 , 127, i, c1, c2, &r)) return r;
+		if (demo::palRamp(128, 255, i, c2, c0, &r)) return r;
+		return r;
+	});
 	auto palFire = demo::makePal<sf::Uint32, 256>([] (size_t i) {
-		if (i < 64 ) return demo::argb(255, 0            , 0           , 4 * i);
-		if (i < 128) return demo::argb(255, 0            , 4 * (i - 64), 255  );
-		if (i < 192) return demo::argb(255, 4 * (i - 128), 255         , 255  );
-		return              demo::argb(255, 255          , 255         , 255  );
+		sf::Uint32 r = 0;
+		if (demo::palRamp(0  , 63 , i, 0xff000000, 0xff0000ff, &r)) return r;
+		if (demo::palRamp(64 , 127, i, 0xff0000ff, 0xff00ffff, &r)) return r;
+		if (demo::palRamp(128, 191, i, 0xff00ffff, 0xffffffff, &r)) return r;
+		if (demo::palRamp(192, 255, i, 0xffffffff, 0xffffffff, &r)) return r;
+		return r;
 	});
 
 	// run loop
 	win.run([&] (tWin320x200::tBackBuffer& bgFb, int frame) {
 		const int fxDuration = 1000;
 		if (frame < 1 * fxDuration)
+		{
+			plasma->_params = frame;
+			bgFb.transformOfs(fb8->copyXY(*plasma), [&palPlasma] (sf::Uint8 l) { return palPlasma[l]; });
+		}
+		else if (frame < 2 * fxDuration)
 		{
 			const float rzf = 0.5f * frame;
 			const float a = 0.03f * rzf;
@@ -356,11 +404,6 @@ int main(int, char**)
 				int(256.0f * z * cosf(a)), int(256.0f * z * sinf(a))
 			};
 			bgFb.transformOfs(fb8->copyXY(*rotozoom), [&palRZ] (sf::Uint8 l) { return palRZ[l]; });
-		}
-		else if (frame < 2 * fxDuration)
-		{
-			plasma->_params = frame;
-			bgFb.transformOfs(fb8->copyXY(*plasma), [&palPlasma] (sf::Uint8 l) { return palPlasma[l]; });
 		}
 		else if (frame < 3 * fxDuration)
 		{
