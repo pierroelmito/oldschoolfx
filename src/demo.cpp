@@ -3,6 +3,8 @@
 #include <SFML/Window.hpp>
 #include <SFML/System.hpp>
 
+#include <functional>
+
 namespace demo
 {
 
@@ -180,28 +182,24 @@ inline sf::Uint32 abgr(sf::Uint8 a, sf::Uint8 b, sf::Uint8 g, sf::Uint8 r)
 inline sf::Uint32 modulate(sf::Uint32 a, sf::Uint32 b)
 {
 	typedef sf::Uint8 tColor[4];
-	tColor& c = *reinterpret_cast<tColor*>(&a);
-	tColor& d = *reinterpret_cast<tColor*>(&b);
 	sf::Uint32 r;
+	const tColor& c = *reinterpret_cast<const tColor*>(&a);
+	const tColor& d = *reinterpret_cast<const tColor*>(&b);
 	tColor& e = *reinterpret_cast<tColor*>(&r);
-	e[0] = sf::Uint8(c[0] * d[0] / 255u);
-	e[1] = sf::Uint8(c[1] * d[1] / 255u);
-	e[2] = sf::Uint8(c[2] * d[2] / 255u);
-	e[3] = sf::Uint8(c[3] * d[3] / 255u);
+	for (int i = 0; i < 4; ++i)
+		e[i] = sf::Uint8(c[i] * d[i] / 255u);
 	return r;
 }
 
 inline sf::Uint32 blend(sf::Uint32 a, sf::Uint32 b, int mul, int div)
 {
 	typedef sf::Uint8 tColor[4];
-	tColor& c = *reinterpret_cast<tColor*>(&a);
-	tColor& d = *reinterpret_cast<tColor*>(&b);
 	sf::Uint32 r;
+	const tColor& c = *reinterpret_cast<const tColor*>(&a);
+	const tColor& d = *reinterpret_cast<const tColor*>(&b);
 	tColor& e = *reinterpret_cast<tColor*>(&r);
-	e[0] = sf::Uint8(((div - mul) * c[0] + mul * d[0]) / div);
-	e[1] = sf::Uint8(((div - mul) * c[1] + mul * d[1]) / div);
-	e[2] = sf::Uint8(((div - mul) * c[2] + mul * d[2]) / div);
-	e[3] = sf::Uint8(((div - mul) * c[3] + mul * d[3]) / div);
+	for (int i = 0; i < 4; ++i)
+		e[i] = sf::Uint8(((div - mul) * c[i] + mul * d[i]) / div);
 	return r;
 }
 
@@ -221,6 +219,24 @@ std::array<T, N> makePal(const F& f)
 	std::array<T, N> r;
 	for (size_t i = 0; i < N; ++i)
 		r[i] = f(i);
+	return r;
+}
+
+template <class T, size_t N>
+std::array<T, N> makeRampPal(const std::initializer_list<T>& l)
+{
+	std::array<T, N> r;
+	auto i0 = l.begin();
+	auto i1 = i0 + 1;
+	for (size_t i = 0; i < l.size() - 1; ++i)
+	{
+		T cs = *i0++;
+		T ce = *i1++;
+		size_t s = (256 * (i + 0)) / (l.size() - 1);
+		size_t e = (256 * (i + 1)) / (l.size() - 1);
+		for (size_t j = s; j < e; ++j)
+			r[j] = blend(cs, ce, j - s, e - 1 - s);
+	}
 	return r;
 }
 
@@ -264,8 +280,8 @@ static inline sf::Uint8 computeCC(int x, int y, const ccparams& p)
 
 struct rzparams
 {
-	int cx, cy;
-	int dx, dy;
+	int cx, cy; // center
+	int dx, dy; // direction
 };
 
 static inline sf::Uint8 computeRotozoom(int x, int y, const rzparams& p)
@@ -314,23 +330,27 @@ static inline sf::Uint8 computePlasma(int x, int y, const int& frame)
 inline void setFire(sf::Uint16* d, int frame)
 {
 	// use 16bpp buffer to increase quality
+
+	// update random values at bottom pixel line
 	if (frame % 4 == 0)
 	{
 		for (int j = 0; j < ScrWidth;)
 		{
 			sf::Uint8 r = 192 + 63 * (rand() % 2);
+			// 10 pixels bloc
 			for (int i = 0; i < 10; ++i, ++j)
-			{
 				d[(ScrHeight - 1) * ScrWidth + j] = (r << 8) + rand() % 256;
-			}
 		}
 	}
+
+	// two loops per frame for quicker fire
 	for (int j = 0; j < 2; ++j)
 	{
 		for (int i = 0; i < (ScrHeight - 1) * ScrWidth; ++i)
 		{
+			// blur upward in place
 			d[i] = (2 * d[i] + 1 * d[i + ScrWidth - 1] + 3 * d[i + ScrWidth] + 2 * d[i + ScrWidth + 1]) / 8;
-			if (d[i] > 255 /*&& d[i] < (200 << 8)*/)
+			if (d[i] > 255)
 				d[i] -= 256;
 		}
 	}
@@ -356,72 +376,63 @@ int main(int, char**)
 	auto plasma = new demo::buffer<sf::Uint8, ScrWidth, ScrHeight, demo::procst<sf::Uint8, ScrWidth, ScrHeight, int, computePlasma>>();
 
 	// palettes
-	auto palCC = demo::makePal<sf::Uint32, 256>([] (size_t i) {
-		sf::Uint32 r = 0;
-		if (demo::palRamp(0, 255, i, 0xff00ff00, 0xffff00ff, &r)) return r;
-		return r;
-	});
-	auto palRZ = demo::makePal<sf::Uint32, 256>([] (size_t i) {
-		sf::Uint32 r = 0;
-		if (demo::palRamp(0, 255, i, 0xff0000ff, 0xffffff00, &r)) return r;
-		return r;
-	});
-	auto palPlasma = demo::makePal<sf::Uint32, 256>([] (size_t i) {
-		const sf::Uint32 c0 = 0xffff0000;
-		const sf::Uint32 c1 = 0xff0000ff;
-		const sf::Uint32 c2 = 0xff00ffff;
-		sf::Uint32 r = 0;
-		if (demo::palRamp(0  , 63 , i, c0, c1, &r)) return r;
-		if (demo::palRamp(64 , 127, i, c1, c2, &r)) return r;
-		if (demo::palRamp(128, 255, i, c2, c0, &r)) return r;
-		return r;
-	});
-	auto palFire = demo::makePal<sf::Uint32, 256>([] (size_t i) {
-		sf::Uint32 r = 0;
-		if (demo::palRamp(0  , 63 , i, 0xff000000, 0xff0000ff, &r)) return r;
-		if (demo::palRamp(64 , 127, i, 0xff0000ff, 0xff00ffff, &r)) return r;
-		if (demo::palRamp(128, 191, i, 0xff00ffff, 0xffffffff, &r)) return r;
-		if (demo::palRamp(192, 255, i, 0xffffffff, 0xffffffff, &r)) return r;
-		return r;
-	});
+	auto palCC = demo::makeRampPal<sf::Uint32, 256>( { 0xff00ff00, 0xffff00ff } );
+	auto palRZ = demo::makeRampPal<sf::Uint32, 256>( { 0xff0000ff, 0xffffff00 } );
+	auto palPlasma = demo::makeRampPal<sf::Uint32, 256>( { 0xffff0000, 0xff0000ff, 0xff00ffff, 0xffff0000 } );
+	auto palFire = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xff0000ff, 0xff00ffff, 0xffffffff, 0xffffffff } );
+
+	typedef std::function<void(tWin320x200::tBackBuffer&, int)> tFxFunc;
+
+	// plasma
+	tFxFunc plasmaFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
+		plasma->_params = frame;
+		bgFb.transformOfs(fb8->copyXY(*plasma), [&palPlasma] (sf::Uint8 l) { return palPlasma[l]; });
+	};
+
+	// rotozoom
+	tFxFunc rzFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
+		const float rzf = 0.5f * frame;           // time
+		const float a = 0.03f * rzf;              // angle
+		const float z = 1.2f + cosf(0.05f * rzf); // zoom
+		const float r = 500.0f;                   // move radius
+		rotozoom->_params = {
+			int(128.0f + 256.0f * r * cosf(0.03f * rzf)) , int(128.0f + 256.0f * r * cosf(0.04f * rzf)), // center
+			int(256.0f * z * cosf(a)), int(256.0f * z * sinf(a))                                         // direction
+		};
+		bgFb.transformOfs(fb8->copyXY(*rotozoom), [&palRZ] (sf::Uint8 l) { return palRZ[l]; });
+	};
+
+	// fire
+	tFxFunc fireFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
+		setFire(fb16->data(), frame);
+		bgFb.transformOfs(*fb16, [&palFire] (sf::Uint16 l) { return palFire[l >> 8]; });
+	};
+
+	// circles
+	tFxFunc ccFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
+		cc->_params = {
+			int(160 + 150 * sinf(0.03f * frame)), 100, // first pos
+			160, int(100 + 90 * sinf(0.04f * frame))   // second pos
+		};
+		bgFb.transformOfs(fb8->copyXY(*cc), [&palCC] (sf::Uint8 l) { return palCC[l]; });
+	};
+
+	// FX list
+	tFxFunc fxs[] = {
+		fireFunc,
+		plasmaFunc,
+		rzFunc,
+		ccFunc,
+	};
 
 	// run loop
 	win.run([&] (tWin320x200::tBackBuffer& bgFb, int frame) {
+		const int fxCount = sizeof(fxs) / sizeof(fxs[0]);
 		const int fxDuration = 1000;
-		if (frame < 1 * fxDuration)
-		{
-			plasma->_params = frame;
-			bgFb.transformOfs(fb8->copyXY(*plasma), [&palPlasma] (sf::Uint8 l) { return palPlasma[l]; });
-		}
-		else if (frame < 2 * fxDuration)
-		{
-			const float rzf = 0.5f * frame;
-			const float a = 0.03f * rzf;
-			const float z = 1.2f + cosf(0.05f * rzf);
-			const float r = 500.0f;
-			rotozoom->_params = {
-				int(128.0f + 256.0f * r * cosf(0.03f * rzf)) , int(128.0f + 256.0f * r * cosf(0.04f * rzf)),
-				int(256.0f * z * cosf(a)), int(256.0f * z * sinf(a))
-			};
-			bgFb.transformOfs(fb8->copyXY(*rotozoom), [&palRZ] (sf::Uint8 l) { return palRZ[l]; });
-		}
-		else if (frame < 3 * fxDuration)
-		{
-			setFire(fb16->data(), frame);
-			bgFb.transformOfs(*fb16, [&palFire] (sf::Uint16 l) { return palFire[l >> 8]; });
-		}
-		else if (frame < 4 * fxDuration)
-		{
-			cc->_params = {
-				int(160 + 150 * sinf(0.03f * frame)), 100,
-				160, int(100 + 90 * sinf(0.04f * frame))
-			};
-			bgFb.transformOfs(fb8->copyXY(*cc), [&palCC] (sf::Uint8 l) { return palCC[l]; });
-		}
-		else
-		{
+		if (frame >= fxDuration * fxCount)
 			return false;
-		}
+		int fxIdx = frame / fxDuration;
+		fxs[fxIdx](bgFb, frame);
 		return true;
 	});
 	
