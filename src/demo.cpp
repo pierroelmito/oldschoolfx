@@ -413,31 +413,56 @@ inline sf::Uint8 getAt(sf::Uint8* const rnd, int w, int h, int x, int y)
 	return rnd[ny * w + nx];
 }
 
+float tactac(float x)
+{
+	x = 2.0f * x - 1.0f;
+	return x;
+}
+
+sf::Uint8 computeNoise(int x, int y, int w, int h)
+{
+	float nx = tactac(x / float(w - 1));
+	float ny = tactac(y / float(h - 1));
+	float b = slerpf(std::min(1.0f, sqrtf(nx * nx + ny * ny)));
+	return sf::Uint8(63.99f * b) + rand() % 192;
+}
+
+void fillNoise(sf::Uint8* rndNoise, int w, int h)
+{
+	for (int y = 0, offset = 0; y < h; ++y)
+		for (int x = 0; x < w; ++x)
+			rndNoise[offset++] = computeNoise(x, y, w, h);
+}
+
 inline sf::Uint8 sampleNoise(int x, int y, sf::Uint8* const rnd, int rw, int rh)
 {
 	float c = 0;
 	float tw = 0;
 
-	for (int i = 0; i <= 6; ++i)
+	for (int i = 0; i <= 3; ++i)
 	{
-		const int nx = (x >> i) + 3 * i;
-		const int ny = (y >> i) + 3 * i;
+		const int nx = (x >> i);
+		const int ny = (y >> i);
+
 		const float tl = getAt(rnd, rw, rh, nx + 0, ny + 0) / 255.0f;
 		const float tr = getAt(rnd, rw, rh, nx + 1, ny + 0) / 255.0f;
 		const float bl = getAt(rnd, rw, rh, nx + 0, ny + 1) / 255.0f;
 		const float br = getAt(rnd, rw, rh, nx + 1, ny + 1) / 255.0f;
+
 		const int l = x & ~((1 << i) - 1);
-		const int r = l + (1 << i);
 		const int t = y & ~((1 << i) - 1);
+		const int r = l + (1 << i);
 		const int b = t + (1 << i);
+
 		const float rx1 = slerpf(float(x - l) / float(r - l));
 		const float ry1 = slerpf(float(y - t) / float(b - t));
 		const float rx0 = 1.0f - rx1;
 		const float ry0 = 1.0f - ry1;
+
 		const float div = rx0 * ry0 + rx1 * ry0 + rx0 * ry1 + rx1 * ry1;
 		const float fv = rx0 * ry0 * tl + rx1 * ry0 * tr + rx0 * ry1 * bl + rx1 * ry1 * br;
 
-		const float w = powf(0.4f, 7 - i);
+		const float w = powf(0.4f, 4 - i);
 		tw += w;
 		c += w * fv / div;
 	}
@@ -484,12 +509,10 @@ int main(int, char**)
 	// images
 	auto pipo = demo::makeBuffer<sf::Uint8, 256, 256>(samplePlasma);
 	auto mito = demo::makeBuffer<sf::Uint8, 256, 256>(sampleRZ);
-	sf::Uint8 rndNoise[16 * 10] = { 0 };
-	for (int y = 0, offset = 0; y < 10; ++y)
-		for (int x = 0; x < 16; ++x)
-			rndNoise[offset++] = ((x ^ y) & 1) * 64 + rand() % 192;
-	//std::generate(rndNoise, rndNoise + sizeof(rndNoise), [] () { return rand() % 256; });
-	auto bidon = demo::makeBuffer<sf::Uint8, 320, 200>(sampleNoise, &rndNoise[0], 16, 10);
+	const int NW = 40, NH = 25;
+	sf::Uint8 rndNoise[NW * NH] = { 0 };
+	fillNoise(rndNoise, NW, NH);
+	auto bidon = demo::makeBuffer<sf::Uint8, 320, 200>(sampleNoise, &rndNoise[0], NW, NH);
 
 	// palettes
 	auto palNoise = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xffffffff } );
