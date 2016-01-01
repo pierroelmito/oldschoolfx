@@ -259,6 +259,9 @@ buffer<T, W, H, frameb<T, W, H>>* makeBuffer(T f(int, int, P...), P... p)
 	for (int y = 0; y < H; ++y)
 		for (int x = 0; x < W; ++x)
 			r->data()[offset++] = f(x, y, p...);
+	// duplicate last horizontal line
+	for (int x = 0; x < W; ++x)
+		r->data()[W * H + x] = r->data()[W * (H - 1) + x];
 	return r;
 }
 
@@ -364,9 +367,9 @@ struct plasmaparams
 
 static inline sf::Uint8 computePlasma(int x, int y, const plasmaparams& p)
 {
-	const sf::Uint8 p0 = demo::sample(p.data, x, y);
+	const sf::Uint8 p0 = demo::sample(p.data, x + y / 2, 3 * y / 2);
 	const sf::Uint8 p1 = demo::sample(p.data, x + fakesin<int>(y + (20 * p.frame) / 16, 256), y);
-	const sf::Uint8 p2 = demo::sample(p.data, x, y + fakesin<int>(x + (27 * p.frame) / 16, 256));
+	const sf::Uint8 p2 = demo::sample(p.data, 5 * x / 4, y + fakesin<int>(x + (27 * p.frame) / 16, 256));
 	return p0 + p1 + p2;
 }
 
@@ -406,25 +409,25 @@ inline void setFire(sf::Uint16* d, int frame)
 // noise
 // ---------------------------------------------------------------------------------------
 
-inline sf::Uint8 getAt(sf::Uint8* const rnd, int w, int h, int x, int y)
+inline sf::Uint8 getAtWrap(const sf::Uint8* const rnd, int w, int h, int x, int y)
 {
 	const int nx = x % w;
 	const int ny = y % h;
+	//const int nx = x >= 0 ? (x % w) : -(-x % w);
+	//const int ny = y >= 0 ? (y % h) : -(-y % h);
 	return rnd[ny * w + nx];
 }
 
-float tactac(float x)
+inline sf::Uint8 getAtClamp(const sf::Uint8* const rnd, int w, int h, int x, int y)
 {
-	x = 2.0f * x - 1.0f;
-	return x;
+	const int nx = std::max(0, std::min(w - 1, x));
+	const int ny = std::max(0, std::min(h - 1, y));
+	return rnd[ny * w + nx];
 }
 
 sf::Uint8 computeNoise(int x, int y, int w, int h)
 {
-	float nx = tactac(x / float(w - 1));
-	float ny = tactac(y / float(h - 1));
-	float b = slerpf(std::min(1.0f, sqrtf(nx * nx + ny * ny)));
-	return sf::Uint8(63.99f * b) + rand() % 192;
+	return (rand() % 1000 > 750 ? 224 : 0) + rand() % 32;
 }
 
 void fillNoise(sf::Uint8* rndNoise, int w, int h)
@@ -434,46 +437,64 @@ void fillNoise(sf::Uint8* rndNoise, int w, int h)
 			rndNoise[offset++] = computeNoise(x, y, w, h);
 }
 
-inline sf::Uint8 sampleNoise(int x, int y, sf::Uint8* const rnd, int rw, int rh)
+inline sf::Uint8 sampleNoise(int x, int y, sf::Uint8* const rnd, int rw, int rh, int steps)
 {
 	float c = 0;
 	float tw = 0;
 
-	for (int i = 0; i <= 3; ++i)
+	for (int i = 0; i <= steps; ++i)
 	{
-		const int nx = (x >> i);
-		const int ny = (y >> i);
+		const int nx = (x >> i) + i * 2;
+		const int ny = (y >> i) + i * 2;
 
-		const float tl = getAt(rnd, rw, rh, nx + 0, ny + 0) / 255.0f;
-		const float tr = getAt(rnd, rw, rh, nx + 1, ny + 0) / 255.0f;
-		const float bl = getAt(rnd, rw, rh, nx + 0, ny + 1) / 255.0f;
-		const float br = getAt(rnd, rw, rh, nx + 1, ny + 1) / 255.0f;
+		const float tl = getAtWrap(rnd, rw, rh, nx + 0, ny + 0) / 255.0f; // top left value
+		const float tr = getAtWrap(rnd, rw, rh, nx + 1, ny + 0) / 255.0f; // top right value
+		const float bl = getAtWrap(rnd, rw, rh, nx + 0, ny + 1) / 255.0f; // bottom left value
+		const float br = getAtWrap(rnd, rw, rh, nx + 1, ny + 1) / 255.0f; // bottom right value
 
 		const int l = x & ~((1 << i) - 1);
 		const int t = y & ~((1 << i) - 1);
 		const int r = l + (1 << i);
 		const int b = t + (1 << i);
 
+		// compute bilinear coefficients
 		const float rx1 = slerpf(float(x - l) / float(r - l));
 		const float ry1 = slerpf(float(y - t) / float(b - t));
 		const float rx0 = 1.0f - rx1;
 		const float ry0 = 1.0f - ry1;
 
-		const float div = rx0 * ry0 + rx1 * ry0 + rx0 * ry1 + rx1 * ry1;
 		const float fv = rx0 * ry0 * tl + rx1 * ry0 * tr + rx0 * ry1 * bl + rx1 * ry1 * br;
 
-		const float w = powf(0.4f, 4 - i);
+		const float w = powf(0.4f, steps + 1 - i);
 		tw += w;
-		c += w * fv / div;
+		c += w * fv;
 	}
 
 	c /= tw;
 	return int(255.99f * c);
 }
 
-// ---------------------------------------------------------------------------------------
+// ----------50--------------------------------------------------------------------------
 // bump
 // ---------------------------------------------------------------------------------------
+
+void bump(sf::Uint8* dst, const sf::Uint8* src, int W, int H, int lposx, int lposy)
+{
+	for (int y = 0, offset = 0; y < H; ++y)
+	{
+		for (int x = 0; x < W; ++x, ++offset)
+		{
+			int nx = int(src[offset + 1]) - int(src[offset]);
+			int ny = int(src[offset + W]) - int(src[offset]);
+			int lx = lposx - x;
+			int ly = lposy - y;
+			int sql = 256 + (lx * lx + ly * ly);
+			int l = 2048 * (nx * lx + ny * ly) / sql;
+			l = l >= 0 ? (l > 255 ? 255 : l) : 0;
+			dst[offset] = l;
+		}
+	}
+}
 
 // ---------------------------------------------------------------------------------------
 // tunnel
@@ -482,6 +503,74 @@ inline sf::Uint8 sampleNoise(int x, int y, sf::Uint8* const rnd, int rw, int rh)
 // ---------------------------------------------------------------------------------------
 // water ripples
 // ---------------------------------------------------------------------------------------
+
+typedef sf::Uint16 tWaterHeight;
+
+constexpr tWaterHeight MediumHeight = (1 << ((8 * sizeof(tWaterHeight)) - 1)) - 1;
+
+void waterPlot(tWaterHeight* dst, int W, int H, int cx, int cy, int r)
+{
+	for (int y = cy - r; y < cy + r; ++y)
+	{
+		for (int x = cx - r; x < cx + r; ++x)
+		{
+			int d2 = dist(x, y, cx, cy);
+			int r2 = r * r;
+			if (d2 < r2)
+				dst[y * W + x] = MediumHeight + (MediumHeight * d2) / r2;
+		}
+	}
+}
+
+void waterInit(tWaterHeight* dst, int W, int H)
+{
+	for (int offset = 0; offset < W * (H + 1); ++offset)
+		dst[offset] = MediumHeight ;
+}
+
+void waterMove(tWaterHeight* dst, const tWaterHeight* src, int W, int H)
+{
+	for (int y = 0, offset = 0; y < H; ++y)
+	{
+		for (int x = 0; x < W; ++x, ++offset)
+		{
+			const int dx0 = x == 0     ? 0 : -1;
+			const int dx1 = x == W - 1 ? 0 :  1;
+			const int dy0 = y == 0     ? 0 : -W;
+			const int dy1 = y == H - 1 ? 0 :  W;
+
+			const int vt = int(src[offset + dy0]);
+			const int vb = int(src[offset + dy1]);
+			const int vl = int(src[offset + dx0]);
+			const int vr = int(src[offset + dx1]);
+
+			const int vtl = int(src[offset + dy0 + dx0]);
+			const int vtr = int(src[offset + dy0 + dx1]);
+			const int vbl = int(src[offset + dy1 + dx0]);
+			const int vbr = int(src[offset + dy1 + dx1]);
+
+			const int s = (3 * (vt + vb + vl + vr) + 2 * (vtl + vtr + vbl + vbr)) / (3 * 4 + 2 * 4);
+
+			const int nv = 2 * s - dst[offset];
+			const int div = 32;
+			dst[offset] = (MediumHeight  + ((div - 1) * nv)) / div;
+		}
+	}
+}
+
+template <typename T>
+void waterDistort(T* dst, const T* src, const tWaterHeight* hm, int W, int H, int mul, int div)
+{
+	for (int y = 0, offset = 0; y < H; ++y)
+	{
+		for (int x = 0; x < W; ++x, ++offset)
+		{
+			int nx = x + mul * (int(hm[offset + 1]) - int(hm[offset])) / div;
+			int ny = y + mul * (int(hm[offset + W]) - int(hm[offset])) / div;
+			dst[offset] = getAtClamp(src, W, H, nx, ny);
+		}
+	}
+}
 
 // ---------------------------------------------------------------------------------------
 // bars
@@ -498,34 +587,69 @@ int main(int, char**)
 	tWin320x200 win;
 
 	// back buffers
-	auto fb8 = win.createBuffer<sf::Uint8>();
-	auto fb16 = win.createBuffer<sf::Uint16>();
+	auto fb16a = win.createBuffer<sf::Uint16>();
+	auto fb16b = win.createBuffer<sf::Uint16>();
+	auto fb8a = win.createBuffer<sf::Uint8>();
+	//auto fb8b = win.createBuffer<sf::Uint8>();
+	//auto fb8c = win.createBuffer<sf::Uint8>();
 
 	// fx buffers
-	auto cc = new demo::buffer<sf::Uint8, ScrWidth, ScrHeight, demo::procst<sf::Uint8, ScrWidth, ScrHeight, ccparams, computeCC>>();
+	auto cc       = new demo::buffer<sf::Uint8, ScrWidth, ScrHeight, demo::procst<sf::Uint8, ScrWidth, ScrHeight, ccparams, computeCC>>();
 	auto rotozoom = new demo::buffer<sf::Uint8, ScrWidth, ScrHeight, demo::procst<sf::Uint8, ScrWidth, ScrHeight, rzparams, computeRotozoom>>();
-	auto plasma = new demo::buffer<sf::Uint8, ScrWidth, ScrHeight, demo::procst<sf::Uint8, ScrWidth, ScrHeight, plasmaparams, computePlasma>>();
+	auto plasma   = new demo::buffer<sf::Uint8, ScrWidth, ScrHeight, demo::procst<sf::Uint8, ScrWidth, ScrHeight, plasmaparams, computePlasma>>();
 
 	// images
-	auto pipo = demo::makeBuffer<sf::Uint8, 256, 256>(samplePlasma);
-	auto mito = demo::makeBuffer<sf::Uint8, 256, 256>(sampleRZ);
 	const int NW = 40, NH = 25;
 	sf::Uint8 rndNoise[NW * NH] = { 0 };
 	fillNoise(rndNoise, NW, NH);
-	auto bidon = demo::makeBuffer<sf::Uint8, 320, 200>(sampleNoise, &rndNoise[0], NW, NH);
+	auto bidon = demo::makeBuffer<sf::Uint8, 320, 200>(sampleNoise, &rndNoise[0], NW, NH, 6);
+	auto pipo  = demo::makeBuffer<sf::Uint8, 256, 256>(samplePlasma);
+	auto mito  = demo::makeBuffer<sf::Uint8, 256, 256>(sampleRZ);
 
 	// palettes
-	auto palNoise = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xffffffff } );
-	auto palCC = demo::makeRampPal<sf::Uint32, 256>( { 0xff00ff00, 0xffff00ff } );
-	auto palRZ = demo::makeRampPal<sf::Uint32, 256>( { 0xff0000ff, 0xffffff00 } );
+	auto palGrey   = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xffffffff } );
+	auto palBump   = demo::makeRampPal<sf::Uint32, 256>( { 0xff0f0000, 0xff00007f, 0xff7fffff, 0xffffffff } );
+	auto palCC     = demo::makeRampPal<sf::Uint32, 256>( { 0xff00ff00, 0xffff00ff } );
+	auto palRZ     = demo::makeRampPal<sf::Uint32, 256>( { 0xff0000ff, 0xffffff00 } );
 	auto palPlasma = demo::makeRampPal<sf::Uint32, 256>( { 0xffff0000, 0xff0000ff, 0xff00ffff, 0xffff0000 } );
-	auto palFire = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xff0000ff, 0xff00ffff, 0xffffffff, 0xffffffff } );
+	auto palFire   = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xff0000ff, 0xff00ffff, 0xffffffff, 0xffffffff } );
 
 	typedef std::function<void(tWin320x200::tBackBuffer&, int)> tFxFunc;
 
+	waterInit(fb16a->data(), ScrWidth, ScrHeight); 
+	waterInit(fb16b->data(), ScrWidth, ScrHeight); 
+
+	// water
+	tFxFunc waterFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
+		float sc = 0.03f;
+		bool b = (frame % 2 == 0);
+		auto b0 = b ? fb16a : fb16b;
+		auto b1 = b ? fb16b : fb16a;
+		waterPlot(
+			b1->data(),
+			ScrWidth,
+			ScrHeight,
+			ScrWidth * (0.5f * (1.0f + 0.8f * cosf(sc * frame))),
+			ScrHeight * (0.5f * (1.0f + 0.8f * sinf(1.2f * sc * frame))),
+			10
+		);
+		waterMove(b0->data(), b1->data(), ScrWidth, ScrHeight);
+		waterDistort(fb8a->data(), bidon->data(), b0->data(), ScrWidth, ScrHeight, 4, 16 * 256);
+		bgFb.transformOfs(*fb8a, [&] (sf::Uint8 l) { return palGrey[l]; });
+	};
+
 	// bump 
 	tFxFunc bumpFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
-		bgFb.transformOfs(fb8->copyXY(*bidon), [&palNoise] (sf::Uint8 l) { return palNoise[l]; });
+		float sc = 0.03f;
+		bump(
+			fb8a->data(),
+			bidon->data(),
+			ScrWidth,
+			ScrHeight,
+			ScrWidth * (0.5f * (1.0f + 0.9f * cosf(sc * frame))),
+			ScrHeight * (0.5f * (1.0f + 0.9f * sinf(1.2f * sc * frame)))
+		);
+		bgFb.transformOfs(*fb8a, [&] (sf::Uint8 l) { return palBump[l]; });
 	};
 
 	// plasma
@@ -534,7 +658,7 @@ int main(int, char**)
 			pipo->data(),
 			frame,
 		};
-		bgFb.transformOfs(fb8->copyXY(*plasma), [&palPlasma] (sf::Uint8 l) { return palPlasma[l]; });
+		bgFb.transformOfs(fb8a->copyXY(*plasma), [&] (sf::Uint8 l) { return palPlasma[l]; });
 	};
 
 	// rotozoom
@@ -542,19 +666,19 @@ int main(int, char**)
 		const float rzf = 0.5f * frame;           // time
 		const float a = 0.03f * rzf;              // angle
 		const float z = 1.2f + cosf(0.05f * rzf); // zoom
-		const float r = 500.0f;                   // move radius
+		const float r = 256.0f * 500.0f;                   // move radius
 		rotozoom->_params = {
 			mito->data(),
-			int(128.0f + 256.0f * r * cosf(0.03f * rzf)) , int(128.0f + 256.0f * r * cosf(0.04f * rzf)), // center
-			int(256.0f * z * cosf(a)), int(256.0f * z * sinf(a)),                                        // direction
+			int(128.0f + r * cosf(0.03f * rzf)) , int(128.0f + r * cosf(0.04f * rzf)), // center
+			int(256.0f * z * cosf(a)), int(256.0f * z * sinf(a)),                      // direction
 		};
-		bgFb.transformOfs(fb8->copyXY(*rotozoom), [&palRZ] (sf::Uint8 l) { return palRZ[l]; });
+		bgFb.transformOfs(fb8a->copyXY(*rotozoom), [&] (sf::Uint8 l) { return palRZ[l]; });
 	};
 
 	// fire
 	tFxFunc fireFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
-		setFire(fb16->data(), frame);
-		bgFb.transformOfs(*fb16, [&palFire] (sf::Uint16 l) { return palFire[l >> 8]; });
+		setFire(fb16a->data(), frame);
+		bgFb.transformOfs(*fb16a, [&] (sf::Uint16 l) { return palFire[l >> 8]; });
 	};
 
 	// circles
@@ -564,22 +688,23 @@ int main(int, char**)
 			int(160 + 150 * sinf(0.03f * frame)), 100, // first pos
 			160, int(100 + 90 * sinf(0.04f * frame)),  // second pos
 		};
-		bgFb.transformOfs(fb8->copyXY(*cc), [&palCC] (sf::Uint8 l) { return palCC[l]; });
+		bgFb.transformOfs(fb8a->copyXY(*cc), [&] (sf::Uint8 l) { return palCC[l]; });
 	};
 
 	// FX list
 	tFxFunc fxs[] = {
+		waterFunc,
 		bumpFunc,
+		plasmaFunc,
 		rzFunc,
 		ccFunc,
-		plasmaFunc,
 		fireFunc,
 	};
 
 	// run loop
 	win.run([&] (tWin320x200::tBackBuffer& bgFb, int frame) {
 		const int fxCount = sizeof(fxs) / sizeof(fxs[0]);
-		const int fxDuration = 200;
+		const int fxDuration = 2000;
 		if (frame >= fxDuration * fxCount)
 			return false;
 		int fxIdx = frame / fxDuration;
