@@ -1,9 +1,11 @@
 
+#include <cmath>
+
+#include <functional>
+
 #include <SFML/Graphics.hpp>
 #include <SFML/Window.hpp>
 #include <SFML/System.hpp>
-
-#include <functional>
 
 #define SYNC_60Hz 1
 
@@ -658,7 +660,7 @@ int main(int, char**)
 			pipo->data(),
 			frame,
 		};
-		bgFb.transformOfs(fb8a->copyXY(*plasma), [&] (sf::Uint8 l) { return palPlasma[l]; });
+		bgFb.transformXY(*plasma, [&] (sf::Uint8 l) { return palPlasma[l]; });
 	};
 
 	// rotozoom
@@ -672,7 +674,7 @@ int main(int, char**)
 			int(128.0f + r * cosf(0.03f * rzf)) , int(128.0f + r * cosf(0.04f * rzf)), // center
 			int(256.0f * z * cosf(a)), int(256.0f * z * sinf(a)),                      // direction
 		};
-		bgFb.transformOfs(fb8a->copyXY(*rotozoom), [&] (sf::Uint8 l) { return palRZ[l]; });
+		bgFb.transformXY(*rotozoom, [&] (sf::Uint8 l) { return palRZ[l]; });
 	};
 
 	// fire
@@ -688,7 +690,7 @@ int main(int, char**)
 			int(160 + 150 * sinf(0.03f * frame)), 100, // first pos
 			160, int(100 + 90 * sinf(0.04f * frame)),  // second pos
 		};
-		bgFb.transformOfs(fb8a->copyXY(*cc), [&] (sf::Uint8 l) { return palCC[l]; });
+		bgFb.transformXY(*cc, [&] (sf::Uint8 l) { return palCC[l]; });
 	};
 
 	// FX list
