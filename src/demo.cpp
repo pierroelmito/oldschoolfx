@@ -142,7 +142,7 @@ public:
 		sf::Sprite bgSp(bg);
 
 		sf::View view = win.getDefaultView();
-		sf::Vector2u winSize;
+		sf::Vector2u winSize(W, H);
 
 		int frame = 0;
 		while (win.isOpen())
