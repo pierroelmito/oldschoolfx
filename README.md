@@ -1,16 +1,21 @@
 
 # oldschoolfx
 
+A collection of old school demo FX.
+
 ## dependencies
 
-* premake4
-* SFML
+* [premake4](https://premake.github.io) (for building)
+* [SFML](https://www.sfml-dev.org)
 
 ## build
 
-### linux and windows (using MSYS2)
+### linux and windows (using [MSYS2](https://www.msys2.org))
 
+```
+cd build
 premake4 gmake && make
+````
 
 ## FX
 
