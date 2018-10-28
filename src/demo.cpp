@@ -16,12 +16,18 @@ template <typename T, int W, int H>
 class frameb
 {
 public:
+	static constexpr int LENGTH = W * (H + 1);
 	template <typename... P>
-	void init(T f(int, int, P...), P... p)
+	void init(const std::function<T (int, int, P...)>& f, P... p)
 	{
 		for (int y = 0, offset = 0; y < H; ++y)
 			for (int x = 0; x < W; ++x)
 				_data[offset++] = f(x, y, p...);
+	}
+	void fill(T v)
+	{
+		for (int i = 0; i < LENGTH; ++i)
+			_data[i] = v;
 	}
 	T& xy(int x, int y) { return _data[y * W + x]; }
 	T& ofs(int o) { return _data[o]; }
@@ -29,7 +35,7 @@ public:
 	const T& ofs(int o) const { return _data[o]; }
 	T* data() { return _data; }
 private:
-	T _data[W * (H + 1)];
+	T _data[LENGTH];
 };
 
 template <typename T, int W, int H, T (*F)(int, int)>
@@ -115,6 +121,7 @@ class demowin
 {
 public:
 	typedef buffer<sf::Uint32, W, H, demo::frameb<sf::Uint32, W, H>> tBackBuffer;
+	typedef std::function<bool (tBackBuffer&, int, bool&)> tRunFunc;
 
 	demowin()
 	{
@@ -126,10 +133,9 @@ public:
 		return new buffer<T, W, H, demo::frameb<T, W, H>>();
 	}
 
-	template <class F>
-	void run(const F& f)
+	void run(const tRunFunc& f)
 	{
-		auto bgFb = new buffer<sf::Uint32, W, H, demo::frameb<sf::Uint32, W, H>>();
+		auto bgFb = new tBackBuffer();
 
 		sf::RenderWindow win(sf::VideoMode(W, H), "toto");
 #if SYNC_60Hz
@@ -144,6 +150,7 @@ public:
 		sf::View view = win.getDefaultView();
 		sf::Vector2u winSize(W, H);
 
+		int screenIdx = 0;
 		int frame = 0;
 		while (win.isOpen())
 		{
@@ -166,9 +173,21 @@ public:
 				}
 			}
 
-			if (!f(*bgFb, frame))
+			bool screenShot = false;
+			if (!f(*bgFb, frame, screenShot)) {
 				win.close();
+				break;
+			}
+
 			bg.update((sf::Uint8*)&bgFb->ofs(0));
+
+			if (screenShot) {
+				char buffer[256] = {};
+				snprintf(buffer, 256, "fx%04d.png", screenIdx);
+				++screenIdx;
+				auto img = bg.copyToImage();
+				img.saveToFile(buffer);
+			}
 
 			float s0 = winSize.x / float(W);
 			float s1 = winSize.y / float(H);
@@ -476,7 +495,7 @@ inline sf::Uint8 sampleNoise(int x, int y, sf::Uint8* const rnd, int rw, int rh,
 	return int(255.99f * c);
 }
 
-// ----------50--------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------
 // bump
 // ---------------------------------------------------------------------------------------
 
@@ -679,6 +698,9 @@ int main(int, char**)
 
 	// fire
 	tFxFunc fireFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
+		if (frame == 0) {
+			fb16a->fill(0);
+		}
 		setFire(fb16a->data(), frame);
 		bgFb.transformOfs(*fb16a, [&] (sf::Uint16 l) { return palFire[l >> 8]; });
 	};
@@ -703,17 +725,23 @@ int main(int, char**)
 		fireFunc,
 	};
 
-	// run loop
-	win.run([&] (tWin320x200::tBackBuffer& bgFb, int frame) {
+	// run function
+	tWin320x200::tRunFunc runFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame, bool& screenShot) {
 		const int fxCount = sizeof(fxs) / sizeof(fxs[0]);
-		const int fxDuration = 2000;
+		const int fxDuration = 500;
 		if (frame >= fxDuration * fxCount)
 			return false;
 		int fxIdx = frame / fxDuration;
-		fxs[fxIdx](bgFb, frame);
+		int frameIdx = frame % fxDuration;
+		if (frameIdx == fxDuration / 2)
+			screenShot = true;
+		fxs[fxIdx](bgFb, frameIdx);
 		return true;
-	});
-	
+	};
+
+	// run loop
+	win.run(runFunc);
+
 	return 0;
 }
 
