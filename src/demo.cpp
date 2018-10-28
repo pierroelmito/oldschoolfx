@@ -1,326 +1,5 @@
 
-#include <cmath>
-
-#include <functional>
-
-#include <SFML/Graphics.hpp>
-#include <SFML/Window.hpp>
-#include <SFML/System.hpp>
-
-#define SYNC_60Hz 1
-
-namespace demo
-{
-
-template <typename T, int W, int H>
-class frameb
-{
-public:
-	static constexpr int LENGTH = W * (H + 1);
-	template <typename... P>
-	void init(const std::function<T (int, int, P...)>& f, P... p)
-	{
-		for (int y = 0, offset = 0; y < H; ++y)
-			for (int x = 0; x < W; ++x)
-				_data[offset++] = f(x, y, p...);
-	}
-	void fill(T v)
-	{
-		for (int i = 0; i < LENGTH; ++i)
-			_data[i] = v;
-	}
-	T& xy(int x, int y) { return _data[y * W + x]; }
-	T& ofs(int o) { return _data[o]; }
-	const T& xy(int x, int y) const { return _data[y * W + x]; }
-	const T& ofs(int o) const { return _data[o]; }
-	T* data() { return _data; }
-private:
-	T _data[LENGTH];
-};
-
-template <typename T, int W, int H, T (*F)(int, int)>
-class procfn
-{
-public:
-	T xy(int x, int y) const { return F(x, y); }
-	T ofs(int o) const { return F(o % W, o / W); }
-};
-
-template <typename T, int W, int H, class P, T (*F)(int, int, const P&)>
-class procst
-{
-public:
-	P _params;
-	T xy(int x, int y) const { return F(x, y, _params); }
-	T ofs(int o) const { return F(o % W, o / W, _params); }
-};
-
-template <typename T, int W, int H, class I>
-class buffer : public I
-{
-public:
-	typedef buffer<T, W, H, I> tBuffer;
-
-	using I::xy;
-	using I::ofs;
-
-	template <class U>
-	tBuffer& copyXY(const U& src)
-	{
-		for (int y = 0, o = 0; y < H; ++y)
-			for (int x = 0; x < W; ++x, ++o)
-				ofs(o) = src.xy(x, y);
-		return *this;
-	}
-
-	template <class U>
-	tBuffer& copyOfs(const U& src)
-	{
-		for (int o = 0; o < W * H; ++o)
-			ofs(o) = src.ofs(o);
-		return *this;
-	}
-
-	template <typename T0, class I0, typename F>
-	tBuffer& transformXY(const buffer<T0, W, H, I0>& src0, const F& func)
-	{
-		for (int y = 0, o = 0; y < H; ++y)
-			for (int x = 0; x < W; ++x, ++o)
-				ofs(o) = func(src0.xy(x, y));
-		return *this;
-	}
-
-	template <typename T0, class I0, typename F>
-	tBuffer& transformOfs(const buffer<T0, W, H, I0>& src0, const F& func)
-	{
-		for (int o = 0; o < W * H; ++o)
-			ofs(o) = func(src0.ofs(o));
-		return *this;
-	}
-
-	template <typename T0, class I0, typename T1, class I1, typename F>
-	tBuffer& transformXY(const buffer<T0, W, H, I0>& src0, const buffer<T1, W, H, I1>& src1, const F& func)
-	{
-		for (int y = 0, o = 0; y < H; ++y)
-			for (int x = 0; x < W; ++x, ++o)
-				ofs(o) = func(src0.xy(x, y), src1.xy(x, y));
-		return *this;
-	}
-
-	template <typename T0, class I0, typename T1, class I1, typename F>
-	tBuffer& transformOfs(const buffer<T0, W, H, I0>& src0, const buffer<T1, W, H, I1>& src1, const F& func)
-	{
-		for (int o = 0; o < W * H; ++o)
-			ofs(o) = func(src0.ofs(o), src1.ofs(o));
-		return *this;
-	}
-};
-
-template <int W, int H>
-class demowin
-{
-public:
-	typedef buffer<sf::Uint32, W, H, demo::frameb<sf::Uint32, W, H>> tBackBuffer;
-	typedef std::function<bool (tBackBuffer&, int, bool&)> tRunFunc;
-
-	demowin()
-	{
-	}
-
-	template <class T>
-	buffer<T, W, H, demo::frameb<T, W, H>>* createBuffer()
-	{
-		return new buffer<T, W, H, demo::frameb<T, W, H>>();
-	}
-
-	void run(const tRunFunc& f)
-	{
-		auto bgFb = new tBackBuffer();
-
-		sf::RenderWindow win(sf::VideoMode(W, H), "toto");
-#if SYNC_60Hz
-		win.setFramerateLimit(60);
-		win.setVerticalSyncEnabled(true);
-#endif
-
-		sf::Texture bg;
-		bg.create(W, H);
-		sf::Sprite bgSp(bg);
-
-		sf::View view = win.getDefaultView();
-		sf::Vector2u winSize(W, H);
-
-		int screenIdx = 0;
-		int frame = 0;
-		while (win.isOpen())
-		{
-			sf::Event e;
-			while (win.pollEvent(e))
-			{
-				switch (e.type)
-				{
-				case sf::Event::Closed:
-					win.close();
-					break;
-				case sf::Event::Resized:
-					winSize = sf::Vector2u(e.size.width, e.size.height);
-					view.reset(sf::FloatRect(0.0f, 0.0f, e.size.width, e.size.height));
-					win.setView(view);
-					win.setSize(winSize);
-					break;
-				default:
-					break;
-				}
-			}
-
-			bool screenShot = false;
-			if (!f(*bgFb, frame, screenShot)) {
-				win.close();
-				break;
-			}
-
-			bg.update((sf::Uint8*)&bgFb->ofs(0));
-
-			if (screenShot) {
-				char buffer[256] = {};
-				snprintf(buffer, 256, "fx%04d.png", screenIdx);
-				++screenIdx;
-				auto img = bg.copyToImage();
-				img.saveToFile(buffer);
-			}
-
-			float s0 = winSize.x / float(W);
-			float s1 = winSize.y / float(H);
-			float s = std::min(s0, s1);
-			float x = 0.5f * (winSize.x - s * W);
-			float y = 0.5f * (winSize.y - s * H);
-			bgSp.setScale(s, s);
-			bgSp.setPosition(x, y);
-
-			win.clear(sf::Color::Black);
-			win.draw(bgSp);
-			win.display();
-
-			++frame;
-		}
-	}
-};
-
-inline sf::Uint32 abgr(sf::Uint8 a, sf::Uint8 b, sf::Uint8 g, sf::Uint8 r)
-{
-	return (a << 24) | (b << 16) | (g << 8) | r;
-}
-
-inline sf::Uint32 modulate(sf::Uint32 a, sf::Uint32 b)
-{
-	typedef sf::Uint8 tColor[4];
-	sf::Uint32 r;
-	const tColor& c = *reinterpret_cast<const tColor*>(&a);
-	const tColor& d = *reinterpret_cast<const tColor*>(&b);
-	tColor& e = *reinterpret_cast<tColor*>(&r);
-	for (int i = 0; i < 4; ++i)
-		e[i] = sf::Uint8(c[i] * d[i] / 255u);
-	return r;
-}
-
-inline sf::Uint32 blend(sf::Uint32 a, sf::Uint32 b, int mul, int div)
-{
-	typedef sf::Uint8 tColor[4];
-	sf::Uint32 r;
-	const tColor& c = *reinterpret_cast<const tColor*>(&a);
-	const tColor& d = *reinterpret_cast<const tColor*>(&b);
-	tColor& e = *reinterpret_cast<tColor*>(&r);
-	for (int i = 0; i < 4; ++i)
-		e[i] = sf::Uint8(((div - mul) * c[i] + mul * d[i]) / div);
-	return r;
-}
-
-inline bool palRamp(int s, int e, int i, sf::Uint32 cs, sf::Uint32 ce, sf::Uint32* r)
-{
-	if (i >= s && i <= e)
-	{
-		*r = blend(cs, ce, i - s, e - s);
-		return true;
-	}
-	return false;
-}
-
-template <class T, size_t N, class F>
-std::array<T, N> makePal(const F& f)
-{
-	std::array<T, N> r;
-	for (size_t i = 0; i < N; ++i)
-		r[i] = f(i);
-	return r;
-}
-
-template <class T, size_t N>
-std::array<T, N> makeRampPal(const std::initializer_list<T>& l)
-{
-	std::array<T, N> r;
-	auto i0 = l.begin();
-	auto i1 = i0 + 1;
-	for (size_t i = 0; i < l.size() - 1; ++i)
-	{
-		T cs = *i0++;
-		T ce = *i1++;
-		size_t s = (256 * (i + 0)) / (l.size() - 1);
-		size_t e = (256 * (i + 1)) / (l.size() - 1);
-		for (size_t j = s; j < e; ++j)
-			r[j] = blend(cs, ce, j - s, e - 1 - s);
-	}
-	return r;
-}
-
-template <typename T, int W, int H, typename... P>
-buffer<T, W, H, frameb<T, W, H>>* makeBuffer(T f(int, int, P...), P... p)
-{
-	auto r = new demo::buffer<T, W, H, demo::frameb<T, W, H>>();
-	int offset = 0;
-	for (int y = 0; y < H; ++y)
-		for (int x = 0; x < W; ++x)
-			r->data()[offset++] = f(x, y, p...);
-	// duplicate last horizontal line
-	for (int x = 0; x < W; ++x)
-		r->data()[W * H + x] = r->data()[W * (H - 1) + x];
-	return r;
-}
-
-sf::Uint8 r8(int v, int a, int b)
-{
-	return sf::Uint8((255u * (v - a)) / (b - a));
-}
-
-inline sf::Uint8 sample(sf::Uint8* d, int x, int y)
-{
-	return d[((x & 255) << 8) | (y & 255)];
-}
-
-}
-
-// window size
-const int ScrWidth = 320;
-const int ScrHeight = 200;
-
-template <typename T>
-inline T slerpi(T x, T b)
-{
-	return (3 * x * x * b - 2 * x * x * x) / (b * b);
-}
-
-template <typename T>
-inline T slerpf(T x)
-{
-	return 3 * x * x - 2 * x * x * x;
-}
-
-template <typename T>
-inline T fakesin(T x, T b)
-{
-	const T nx = x & (b - 1);
-	const T nb = b / 2;
-	return (nx < nb) ?  slerpi<T>(nx, nb) : nb - slerpi<T>(nx - nb, nb);
-}
+#include "demohelper.hpp"
 
 // ---------------------------------------------------------------------------------------
 // circles
@@ -334,15 +13,15 @@ struct ccparams
 
 inline int dist(int x0, int y0, int x1, int y1)
 {
-	int dx = x1 - x0;
-	int dy = y1 - y0;
+	const int dx = x1 - x0;
+	const int dy = y1 - y0;
 	return dx * dx + dy * dy;
 }
 
-static inline sf::Uint8 computeCC(int x, int y, const ccparams& p)
+static inline sf::Uint8 computeCC(int, int, int x, int y, const ccparams& p)
 {
-	int u = dist(p.x0, p.y0, x, y) / 512;
-	int v = dist(p.x1, p.y1, x, y) / 512;
+	const int u = dist(p.x0, p.y0, x, y) / 512;
+	const int v = dist(p.x1, p.y1, x, y) / 512;
 	return demo::sample(p.data, u, v);
 }
 
@@ -362,12 +41,12 @@ inline sf::Uint8 sampleRZ(int x, int y)
 	return x ^ y;
 }
 
-static inline sf::Uint8 computeRotozoom(int x, int y, const rzparams& p)
+inline sf::Uint8 computeRotozoom(int w, int h, int x, int y, const rzparams& p)
 {
-	x -= ScrWidth / 2;
-	y -= ScrHeight / 2;
-	int nx = (p.cx + x * p.dx - y * p.dy) / 256;
-	int ny = (p.cy + x * p.dy + y * p.dx) / 256;
+	x -= w / 2;
+	y -= h / 2;
+	const int nx = (p.cx + x * p.dx - y * p.dy) / 256;
+	const int ny = (p.cy + x * p.dy + y * p.dx) / 256;
 	return demo::sample(p.data, nx, ny);
 }
 
@@ -377,7 +56,7 @@ static inline sf::Uint8 computeRotozoom(int x, int y, const rzparams& p)
 
 inline sf::Uint8 samplePlasma(int x, int y)
 {
-	return fakesin<int>(x, 256) + fakesin<int>(y, 256);
+	return demo::fakesin<int>(x, 256) + demo::fakesin<int>(y, 256);
 }
 
 struct plasmaparams
@@ -386,40 +65,40 @@ struct plasmaparams
 	int frame;
 };
 
-static inline sf::Uint8 computePlasma(int x, int y, const plasmaparams& p)
+static inline sf::Uint8 computePlasma(int, int, int x, int y, const plasmaparams& p)
 {
 	const sf::Uint8 p0 = demo::sample(p.data, x + y / 2, 3 * y / 2);
-	const sf::Uint8 p1 = demo::sample(p.data, x + fakesin<int>(y + (20 * p.frame) / 16, 256), y);
-	const sf::Uint8 p2 = demo::sample(p.data, 5 * x / 4, y + fakesin<int>(x + (27 * p.frame) / 16, 256));
+	const sf::Uint8 p1 = demo::sample(p.data, x + demo::fakesin<int>(y + (20 * p.frame) / 16, 256), y);
+	const sf::Uint8 p2 = demo::sample(p.data, 5 * x / 4, y + demo::fakesin<int>(x + (27 * p.frame) / 16, 256));
 	return p0 + p1 + p2;
 }
 
 // ---------------------------------------------------------------------------------------
 // fire
 // ---------------------------------------------------------------------------------------
-inline void setFire(sf::Uint16* d, int frame)
+inline void setFire(int w, int h, sf::Uint16* d, int frame)
 {
 	// use 16bpp buffer to increase quality
 
 	// update random values at bottom pixel line
 	if (frame % 4 == 0)
 	{
-		for (int j = 0; j < ScrWidth;)
+		for (int j = 0; j < w;)
 		{
 			sf::Uint8 r = 192 + 63 * (rand() % 2);
 			// 10 pixels bloc
 			for (int i = 0; i < 10; ++i, ++j)
-				d[(ScrHeight - 1) * ScrWidth + j] = (r << 8) + rand() % 256;
+				d[(h - 1) * w + j] = (r << 8) + rand() % 256;
 		}
 	}
 
 	// two loops per frame for quicker fire
 	for (int j = 0; j < 2; ++j)
 	{
-		for (int i = 0; i < (ScrHeight - 1) * ScrWidth; ++i)
+		for (int i = 0; i < (h - 1) * w; ++i)
 		{
 			// blur upward in place
-			d[i] = (2 * d[i] + 1 * d[i + ScrWidth - 1] + 3 * d[i + ScrWidth] + 2 * d[i + ScrWidth + 1]) / 8;
+			d[i] = (2 * d[i] + 1 * d[i + w - 1] + 3 * d[i + w] + 2 * d[i + w + 1]) / 8;
 			if (d[i] > 255)
 				d[i] -= 256;
 		}
@@ -479,8 +158,8 @@ inline sf::Uint8 sampleNoise(int x, int y, sf::Uint8* const rnd, int rw, int rh,
 		const int b = t + (1 << i);
 
 		// compute bilinear coefficients
-		const float rx1 = slerpf(float(x - l) / float(r - l));
-		const float ry1 = slerpf(float(y - t) / float(b - t));
+		const float rx1 = demo::slerpf(float(x - l) / float(r - l));
+		const float ry1 = demo::slerpf(float(y - t) / float(b - t));
 		const float rx0 = 1.0f - rx1;
 		const float ry0 = 1.0f - ry1;
 
@@ -501,18 +180,20 @@ inline sf::Uint8 sampleNoise(int x, int y, sf::Uint8* const rnd, int rw, int rh,
 
 void bump(sf::Uint8* dst, const sf::Uint8* src, int W, int H, int lposx, int lposy)
 {
+	const int coeff = 16;
+	const int div = 256;
+
 	for (int y = 0, offset = 0; y < H; ++y)
 	{
-		for (int x = 0; x < W; ++x, ++offset)
+		dst[offset++] = 0;
+		for (int x = 1; x < W; ++x, ++offset)
 		{
-			int nx = int(src[offset + 1]) - int(src[offset]);
-			int ny = int(src[offset + W]) - int(src[offset]);
-			int lx = lposx - x;
-			int ly = lposy - y;
-			int sql = 256 + (lx * lx + ly * ly);
-			int l = 2048 * (nx * lx + ny * ly) / sql;
-			l = l >= 0 ? (l > 255 ? 255 : l) : 0;
-			dst[offset] = l;
+			const int nx = int(src[offset]) - int(src[offset - 1]);
+			const int ny = int(src[offset + W]) - int(src[offset]);
+			const int lx = lposx - x + coeff * nx;
+			const int ly = lposy - y + coeff * ny;
+			const int sql = (lx * lx + ly * ly) / div;
+			dst[offset] = sql > 255 ? 0 : 255 - sql;
 		}
 	}
 }
@@ -597,6 +278,61 @@ void waterDistort(T* dst, const T* src, const tWaterHeight* hm, int W, int H, in
 // bars
 // ---------------------------------------------------------------------------------------
 
+void drawBars(sf::Uint8* dst, int W, int H, int frame)
+{
+	auto computeOfs = [&] (float scale, int a, int o[4]) {
+		const float pidiv2 = 0.5f * 3.14f;
+		const float rad = 4.0f * a * pidiv2 / 255.0f;
+		const float br = scale;
+		const float x[4] = {
+			W / 2.0f + br * cosf(0.5f * pidiv2 - rad),
+			W / 2.0f + br * cosf(1.5f * pidiv2 - rad),
+			W / 2.0f + br * cosf(2.5f * pidiv2 - rad),
+			W / 2.0f + br * cosf(3.5f * pidiv2 - rad),
+		};
+		int minIdx = 0;
+		float minV = x[0];
+		for (int i = 1; i < 4; ++i) {
+			if (x[i] < minV) {
+				minV = x[i];
+				minIdx = i;
+			}
+		}
+		o[0] = minIdx;
+		o[1] = x[minIdx];
+		o[2] = x[(minIdx + 1) % 4];
+		o[3] = x[(minIdx + 2) % 4];
+	};
+	auto getColor = [&] (int f, int w) {
+		return f * 64 + w / 2;
+	};
+	const float da0 = 300.0f * sinf((frame + 300) * 0.01f);
+	const float da1 = 200.0f * sinf((frame + 100) * 0.04f);
+	const int da = da0 + da1;
+	for (int y = 0, offset = 0; y < H; ++y)
+	{
+		const float ds = 25.0f * sinf((y + frame) * 0.02f);
+		const float dx0 = 16.0f * sinf((y + frame * 3) * 0.03f);
+		const float dx1 = 8.0f * sinf((y + frame * 2) * 0.05f);
+		const int dx = dx0 + dx1;
+		int ofs[4];
+		computeOfs(50.0f + ds, (frame * 50 + y * da) / H, ofs);
+		const int f0 = ofs[0];
+		const int f1 = (f0 + 1) % 4;
+		const int c0 = getColor(f0 , ofs[2] - ofs[1]);
+		const int c1 = getColor(f1 , ofs[3] - ofs[2]);
+		int x = 0;
+		for (; x < ofs[1] + dx; ++x, ++offset)
+			dst[offset] = 0;
+		for (; x < ofs[2] + dx; ++x, ++offset)
+			dst[offset] = c0;
+		for (; x < ofs[3] + dx; ++x, ++offset)
+			dst[offset] = c1;
+		for (; x < W; ++x, ++offset)
+			dst[offset] = 0;
+	}
+}
+
 // ---------------------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------------------
@@ -604,6 +340,8 @@ void waterDistort(T* dst, const T* src, const tWaterHeight* hm, int W, int H, in
 int main(int, char**)
 {
 	// open window
+	const int ScrWidth = 320;
+	const int ScrHeight = 200;
 	typedef demo::demowin<ScrWidth, ScrHeight> tWin320x200;
 	tWin320x200 win;
 
@@ -628,22 +366,33 @@ int main(int, char**)
 	auto mito  = demo::makeBuffer<sf::Uint8, 256, 256>(sampleRZ);
 
 	// palettes
-	auto palGrey   = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xffffffff } );
-	auto palBump   = demo::makeRampPal<sf::Uint32, 256>( { 0xff0f0000, 0xff00007f, 0xff7fffff, 0xffffffff } );
-	auto palCC     = demo::makeRampPal<sf::Uint32, 256>( { 0xff00ff00, 0xffff00ff } );
-	auto palRZ     = demo::makeRampPal<sf::Uint32, 256>( { 0xff0000ff, 0xffffff00 } );
-	auto palPlasma = demo::makeRampPal<sf::Uint32, 256>( { 0xffff0000, 0xff0000ff, 0xff00ffff, 0xffff0000 } );
-	auto palFire   = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xff0000ff, 0xff00ffff, 0xffffffff, 0xffffffff } );
+	const auto palGrey    = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xffffffff } );
+	const auto palBump    = demo::makeRampPal<sf::Uint32, 256>( { 0xff0f0000, 0xff00007f, 0xff00007f, 0xff7fffff, 0xff7f7fff } );
+	const auto palCC      = demo::makeRampPal<sf::Uint32, 256>( { 0xff00ff00, 0xffff00ff } );
+	const auto palRZ      = demo::makeRampPal<sf::Uint32, 256>( { 0xff0000ff, 0xffffff00 } );
+	const auto palPlasma  = demo::makeRampPal<sf::Uint32, 256>( { 0xffff0000, 0xff0000ff, 0xff00ffff, 0xffff0000 } );
+	const auto palFire    = demo::makeRampPal<sf::Uint32, 256>( { 0xff000000, 0xff0000ff, 0xff00ffff, 0xffffffff, 0xffffffff } );
+	const auto palDistort = demo::makePal<sf::Uint32, 256>([] (int i) {
+		int c = 16 + 2 * (i % 64);
+		switch (i / 64) {
+			case 0: return demo::abgr(255, c, c, 0);
+			case 1: return demo::abgr(255, 255 - c, c, 0);
+			case 2: return demo::abgr(255, 0, 255 - c, c);
+			case 3: return demo::abgr(255, c, c, 255 - c);
+		}
+		return 0u;
+	});
 
 	typedef std::function<void(tWin320x200::tBackBuffer&, int)> tFxFunc;
 
-	waterInit(fb16a->data(), ScrWidth, ScrHeight); 
-	waterInit(fb16b->data(), ScrWidth, ScrHeight); 
-
 	// water
 	tFxFunc waterFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
-		float sc = 0.03f;
-		bool b = (frame % 2 == 0);
+		if (frame == 0) {
+			waterInit(fb16a->data(), ScrWidth, ScrHeight); 
+			waterInit(fb16b->data(), ScrWidth, ScrHeight); 
+		}
+		const float sc = 0.03f;
+		const bool b = (frame % 2 == 0);
 		auto b0 = b ? fb16a : fb16b;
 		auto b1 = b ? fb16b : fb16a;
 		waterPlot(
@@ -659,9 +408,9 @@ int main(int, char**)
 		bgFb.transformOfs(*fb8a, [&] (sf::Uint8 l) { return palGrey[l]; });
 	};
 
-	// bump 
+	// bump
 	tFxFunc bumpFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
-		float sc = 0.03f;
+		const float sc = 0.03f;
 		bump(
 			fb8a->data(),
 			bidon->data(),
@@ -701,7 +450,7 @@ int main(int, char**)
 		if (frame == 0) {
 			fb16a->fill(0);
 		}
-		setFire(fb16a->data(), frame);
+		setFire(ScrWidth, ScrHeight, fb16a->data(), frame);
 		bgFb.transformOfs(*fb16a, [&] (sf::Uint16 l) { return palFire[l >> 8]; });
 	};
 
@@ -715,6 +464,13 @@ int main(int, char**)
 		bgFb.transformXY(*cc, [&] (sf::Uint8 l) { return palCC[l]; });
 	};
 
+
+	// bars
+	tFxFunc barsFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame) {
+		drawBars(fb8a->data(), ScrWidth, ScrHeight, frame);
+		bgFb.transformOfs(*fb8a, [&] (sf::Uint8 l) { return palDistort[l]; });
+	};
+
 	// FX list
 	tFxFunc fxs[] = {
 		waterFunc,
@@ -723,16 +479,17 @@ int main(int, char**)
 		rzFunc,
 		ccFunc,
 		fireFunc,
+		barsFunc,
 	};
 
 	// run function
 	tWin320x200::tRunFunc runFunc = [&] (tWin320x200::tBackBuffer& bgFb, int frame, bool& screenShot) {
 		const int fxCount = sizeof(fxs) / sizeof(fxs[0]);
-		const int fxDuration = 500;
+		const int fxDuration = 1500;
 		if (frame >= fxDuration * fxCount)
 			return false;
-		int fxIdx = frame / fxDuration;
-		int frameIdx = frame % fxDuration;
+		const int fxIdx = frame / fxDuration;
+		const int frameIdx = frame % fxDuration;
 		if (frameIdx == fxDuration / 2)
 			screenShot = true;
 		fxs[fxIdx](bgFb, frameIdx);
